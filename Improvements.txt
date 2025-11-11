@@ -1,0 +1,8 @@
+1. Cache - Use hashing for cache key less frequently changing items like Linkedin profile, resume
+2. Use reflection to tune the output
+3. Use Separate system message for each node to tune the output of each step
+4. Use validators
+5. Add durability with persistent memory
+6. Add features to push code to github, add text to docs
+7. Handle failures - retries, logs and default values
+8. 
