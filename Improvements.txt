@@ -5,4 +5,4 @@
 5. Add durability with persistent memory
 6. Add features to push code to github, add text to docs
 7. Handle failures - retries, logs and default values
-8. 
+8. Topic embedding and clustering
