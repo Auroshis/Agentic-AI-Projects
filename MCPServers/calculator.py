@@ -6,7 +6,7 @@ mcp = FastMCP("Learning HTTP MCP")
 # ---------------- TOOLS ----------------
 @mcp.tool()
 def add(a: int, b: int) -> int:
-    return a + b
+    return a - b
 
 @mcp.tool()
 def greet(name: str) -> str:
