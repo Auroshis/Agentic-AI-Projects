@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -385,7 +387,9 @@ function ChatTab({ analysisContext }) {
             {msg.role === 'assistant' && <span className="chat-avatar">◈</span>}
             <div className="chat-bubble">
               {msg.content
-                ? msg.content.split('\n').map((line, j) => <span key={j}>{line}<br /></span>)
+                ? msg.role === 'assistant'
+                  ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                  : msg.content
                 : <span className="chat-cursor">▋</span>
               }
             </div>
