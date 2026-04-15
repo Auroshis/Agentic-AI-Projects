@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -8,20 +8,70 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/** Map a raw top-level error string to a human-friendly message. */
+function friendlyError(raw) {
+  if (!raw) return 'Something went wrong. Please try again.'
+  const e = raw.toLowerCase()
+  if (e.includes('pdf upload'))
+    return 'PDF upload failed — make sure the file is a valid PDF under 10 MB.'
+  if (e.includes('api key') || e.includes('invalid api') || e.includes('401') || e.includes('authentication'))
+    return 'Your OpenAI API key is invalid or missing. Check your .env file and restart the server.'
+  if (e.includes('connection refused') || e.includes('failed to fetch') || e.includes('networkerror'))
+    return "Can't reach the backend — make sure uvicorn is running on port 8001."
+  if (e.includes('timeout'))
+    return 'The analysis timed out. Try again — large profiles can take a while.'
+  if (e.includes('server error 500'))
+    return 'The server hit an unexpected error. Check the uvicorn terminal for details.'
+  return 'Something went wrong. Please try again.'
+}
+
+/** Convert the raw pipeline errors array into deduplicated, user-friendly strings. */
+function friendlyWarnings(errors) {
+  if (!errors?.length) return []
+  const seen = new Set()
+  const out = []
+  const add = (msg) => { if (!seen.has(msg)) { seen.add(msg); out.push(msg) } }
+
+  for (const raw of errors) {
+    const e = (raw || '').toLowerCase()
+    // Silently ignore "no documents provided" — user chose not to add them
+    if (e.includes('no documents provided') || e.includes('no pdf or google')) continue
+    if (e.includes('linkedin'))
+      add("LinkedIn couldn't be scraped — LinkedIn blocks automated access. Your other sources were still analysed.")
+    else if (e.includes('rate limit') || (e.includes('github') && e.includes('403')))
+      add('GitHub rate limit reached. Add a GITHUB_TOKEN to your .env file to fix this.')
+    else if (e.includes('github') && (e.includes('not found') || e.includes('404')))
+      add("GitHub profile not found — double-check your username.")
+    else if (e.includes('github'))
+      add("GitHub profile couldn't be fully loaded.")
+    else if (e.includes('leetcode'))
+      add("LeetCode stats couldn't be loaded — your profile may be set to private.")
+    else if (e.includes('pdf'))
+      add("Couldn't read your PDF — make sure it's a text-based PDF, not a scanned image.")
+    else if (e.includes('google doc') || e.includes("doc '"))
+      add("Couldn't access a Google Doc — ensure it's shared (View access) with your service account.")
+    else if (e.includes('missing or errored from'))
+      add("Some sources couldn't be scanned — analysis was based on available data.")
+    else if (e.includes('json_parse') || e.includes('parse_failed'))
+      add('An analysis step had a formatting hiccup — results may be incomplete. Try again if they look off.')
+    // All other internal messages are suppressed silently
+  }
+  return out
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const SCANNER_NODES = ['github_scanner', 'leetcode_scanner', 'linkedin_scanner', 'google_docs_scanner']
-
+const SCANNER_NODES  = ['github_scanner', 'leetcode_scanner', 'linkedin_scanner', 'google_docs_scanner']
 const ANALYSIS_NODES = ['gap_analysis', 'plan_generator', 'resume_tuner']
 
 const NODE_META = {
-  github_scanner:      { label: 'GitHub',      icon: '⌥' },
-  leetcode_scanner:    { label: 'LeetCode',    icon: '⚡' },
-  linkedin_scanner:    { label: 'LinkedIn',    icon: '◈' },
-  google_docs_scanner: { label: 'Documents',   icon: '◻' },
-  gap_analysis:        { label: 'Gap Analysis',    icon: '◎' },
-  plan_generator:      { label: 'Learning Plan',   icon: '◐' },
-  resume_tuner:        { label: 'Resume Tuner',    icon: '◑' },
+  github_scanner:      { label: 'GitHub',       icon: '⌥' },
+  leetcode_scanner:    { label: 'LeetCode',     icon: '⚡' },
+  linkedin_scanner:    { label: 'LinkedIn',     icon: '◈' },
+  google_docs_scanner: { label: 'Documents',    icon: '◻' },
+  gap_analysis:        { label: 'Gap Analysis', icon: '◎' },
+  plan_generator:      { label: 'Learning Plan',icon: '◐' },
+  resume_tuner:        { label: 'Resume Tuner', icon: '◑' },
 }
 
 const SAMPLE_JD = `Senior Machine Learning Engineer — FinTech AI Platform
@@ -42,6 +92,14 @@ Nice to have:
 - Kafka / streaming systems
 - AWS or GCP`
 
+const CHAT_SUGGESTIONS = [
+  'Explain my biggest gaps',
+  'What should I learn first?',
+  'Shorten the plan to 4 weeks',
+  'How long to close the full gap?',
+  'What roles match my current skills?',
+]
+
 // ─── Small reusable components ────────────────────────────────────────────────
 
 function StatusDot({ status }) {
@@ -56,7 +114,7 @@ function Badge({ children, variant = 'default' }) {
 }
 
 function ScoreBar({ score }) {
-  const pct = Math.round((score || 0) * 100)
+  const pct   = Math.round((score || 0) * 100)
   const color = pct >= 70 ? '#22c55e' : pct >= 40 ? '#f59e0b' : '#ef4444'
   return (
     <div className="score-wrap">
@@ -74,7 +132,6 @@ function ProgressPanel({ nodeStatus }) {
   return (
     <div className="card progress-card">
       <h3 className="section-title">Pipeline</h3>
-
       <div className="progress-row">
         {SCANNER_NODES.map(node => (
           <div key={node} className={`progress-item ${nodeStatus[node] || 'idle'}`}>
@@ -83,9 +140,7 @@ function ProgressPanel({ nodeStatus }) {
           </div>
         ))}
       </div>
-
       <div className="progress-divider" />
-
       <div className="analysis-steps">
         {ANALYSIS_NODES.map(node => (
           <div key={node} className={`analysis-step ${nodeStatus[node] || 'idle'}`}>
@@ -105,11 +160,7 @@ function GapTab({ gap }) {
   return (
     <div className="tab-content">
       <ScoreBar score={gap.gap_score} />
-
-      {gap.experience_gap && (
-        <div className="info-box">{gap.experience_gap}</div>
-      )}
-
+      {gap.experience_gap && <div className="info-box">{gap.experience_gap}</div>}
       <div className="skill-grid">
         <div className="skill-col">
           <h4 className="skill-col-title green">Strong Matches ({gap.strong_matches?.length || 0})</h4>
@@ -130,7 +181,6 @@ function GapTab({ gap }) {
           </div>
         </div>
       </div>
-
       {gap.analysis_summary && (
         <div className="summary-box">
           <h4>Analysis</h4>
@@ -145,19 +195,13 @@ function PlanTab({ plan }) {
   if (!plan) return <div className="empty">Learning plan not available.</div>
   return (
     <div className="tab-content">
-      {plan.plan_summary && (
-        <div className="summary-box">
-          <p>{plan.plan_summary}</p>
-        </div>
-      )}
-
+      {plan.plan_summary && <div className="summary-box"><p>{plan.plan_summary}</p></div>}
       <div className="plan-meta">
         <span><strong>{plan.total_weeks}</strong> weeks total</span>
         {plan.priority_order?.length > 0 && (
           <span>Priority: {plan.priority_order.slice(0, 4).join(' → ')}</span>
         )}
       </div>
-
       <div className="weeks-list">
         {plan.weekly_plan?.map(week => (
           <div key={week.week} className="week-card">
@@ -173,13 +217,10 @@ function PlanTab({ plan }) {
                 {week.milestones.map((m, i) => <li key={i}>{m}</li>)}
               </ul>
             )}
-            {week.project && (
-              <div className="week-project">Project: {week.project}</div>
-            )}
+            {week.project && <div className="week-project">Project: {week.project}</div>}
           </div>
         ))}
       </div>
-
       {plan.recommended_resources?.length > 0 && (
         <div className="resources-section">
           <h4>Recommended Resources</h4>
@@ -189,9 +230,7 @@ function PlanTab({ plan }) {
                 <span className="resource-skill">{r.skill}</span>
                 <span className="resource-title">{r.title}</span>
                 <span className="resource-platform">{r.platform}</span>
-                {r.estimated_hours && (
-                  <span className="resource-hours">{r.estimated_hours}h</span>
-                )}
+                {r.estimated_hours && <span className="resource-hours">{r.estimated_hours}h</span>}
               </div>
             ))}
           </div>
@@ -214,21 +253,18 @@ function ResumeTab({ resume }) {
           </div>
         </div>
       )}
-
       {sections.summary && (
         <div className="resume-section">
           <h4>Professional Summary</h4>
           <p>{sections.summary}</p>
         </div>
       )}
-
       {sections.skills && (
         <div className="resume-section">
           <h4>Skills</h4>
           <p className="mono">{sections.skills}</p>
         </div>
       )}
-
       {sections.experience && Array.isArray(sections.experience) && (
         <div className="resume-section">
           <h4>Experience</h4>
@@ -246,20 +282,147 @@ function ResumeTab({ resume }) {
           ))}
         </div>
       )}
-
       {resume.cover_letter_snippet && (
         <div className="resume-section">
           <h4>Cover Letter Opening</h4>
           <p className="cover-letter">{resume.cover_letter_snippet}</p>
         </div>
       )}
-
       {resume.tuning_notes && (
         <div className="summary-box">
           <h4>What Was Changed</h4>
           <p>{resume.tuning_notes}</p>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Chat tab ─────────────────────────────────────────────────────────────────
+
+function ChatTab({ analysisContext }) {
+  const gapPct = Math.round((analysisContext?.skill_gap?.gap_score || 0) * 100)
+  const greeting = gapPct > 0
+    ? `I've finished analysing your profile — you're a **${gapPct}% match** for this role. Ask me anything: why a skill is missing, how to tweak the learning plan, what to tackle first, or anything else.`
+    : `Analysis complete. Ask me anything about your gaps, learning plan, or how to improve your profile for this role.`
+
+  const [messages, setMessages] = useState([{ role: 'assistant', content: greeting }])
+  const [input, setInput]       = useState('')
+  const [streaming, setStreaming] = useState(false)
+  const [showSuggestions, setShowSuggestions] = useState(true)
+  const bottomRef = useRef(null)
+  const inputRef  = useRef(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const send = async (text) => {
+    const trimmed = text.trim()
+    if (!trimmed || streaming) return
+
+    setShowSuggestions(false)
+    setInput('')
+    setStreaming(true)
+
+    const history = messages.slice(1) // exclude greeting
+    setMessages(prev => [...prev, { role: 'user', content: trimmed }])
+    setMessages(prev => [...prev, { role: 'assistant', content: '' }])
+
+    try {
+      const resp = await fetch('/api/chat/stream', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: trimmed, history, context: analysisContext }),
+      })
+
+      const reader  = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop()
+
+        for (const part of parts) {
+          const line = part.trim()
+          if (!line.startsWith('data: ')) continue
+          try {
+            const evt = JSON.parse(line.slice(6))
+            if (evt.type === 'token') {
+              setMessages(prev => {
+                const next = [...prev]
+                next[next.length - 1] = {
+                  role: 'assistant',
+                  content: next[next.length - 1].content + evt.content,
+                }
+                return next
+              })
+            }
+          } catch (_) {}
+        }
+      }
+    } catch {
+      setMessages(prev => {
+        const next = [...prev]
+        next[next.length - 1] = { role: 'assistant', content: "Something went wrong. Please try again." }
+        return next
+      })
+    }
+
+    setStreaming(false)
+    inputRef.current?.focus()
+  }
+
+  return (
+    <div className="chat-tab">
+      <div className="chat-messages">
+        {messages.map((msg, i) => (
+          <div key={i} className={`chat-msg chat-msg-${msg.role}`}>
+            {msg.role === 'assistant' && <span className="chat-avatar">◈</span>}
+            <div className="chat-bubble">
+              {msg.content
+                ? msg.content.split('\n').map((line, j) => <span key={j}>{line}<br /></span>)
+                : <span className="chat-cursor">▋</span>
+              }
+            </div>
+          </div>
+        ))}
+
+        {showSuggestions && (
+          <div className="chat-suggestions">
+            {CHAT_SUGGESTIONS.map(s => (
+              <button key={s} className="suggestion-chip" onClick={() => send(s)} disabled={streaming}>
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div ref={bottomRef} />
+      </div>
+
+      <div className="chat-input-row">
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder="Ask about your gaps, tweak the learning plan…"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) send(input) }}
+          disabled={streaming}
+        />
+        <button
+          className="chat-send-btn"
+          onClick={() => send(input)}
+          disabled={!input.trim() || streaming}
+        >
+          {streaming ? <span className="spinner" /> : '↑'}
+        </button>
+      </div>
     </div>
   )
 }
@@ -281,7 +444,7 @@ function PdfUploadField({ pdfFile, setPdfFile, loading }) {
       <div
         className={`pdf-upload-area ${pdfFile ? 'has-file' : ''} ${loading ? 'disabled' : ''}`}
         onClick={() => !loading && fileRef.current?.click()}
-        onDragOver={(e) => e.preventDefault()}
+        onDragOver={e => e.preventDefault()}
         onDrop={handleDrop}
       >
         {pdfFile ? (
@@ -292,7 +455,7 @@ function PdfUploadField({ pdfFile, setPdfFile, loading }) {
             <button
               type="button"
               className="pdf-remove"
-              onClick={(e) => { e.stopPropagation(); setPdfFile(null) }}
+              onClick={e => { e.stopPropagation(); setPdfFile(null) }}
               disabled={loading}
             >✕</button>
           </div>
@@ -308,7 +471,7 @@ function PdfUploadField({ pdfFile, setPdfFile, loading }) {
         type="file"
         accept=".pdf"
         style={{ display: 'none' }}
-        onChange={(e) => setPdfFile(e.target.files[0] || null)}
+        onChange={e => setPdfFile(e.target.files[0] || null)}
       />
     </div>
   )
@@ -317,10 +480,8 @@ function PdfUploadField({ pdfFile, setPdfFile, loading }) {
 // ─── Google Docs URL list ─────────────────────────────────────────────────────
 
 function GoogleDocsField({ urls, setUrls, loading }) {
-  const handleChange = (i, val) => {
-    setUrls(prev => prev.map((u, j) => j === i ? val : u))
-  }
-  const addRow = () => setUrls(prev => [...prev, ''])
+  const handleChange = (i, val) => setUrls(prev => prev.map((u, j) => j === i ? val : u))
+  const addRow    = () => setUrls(prev => [...prev, ''])
   const removeRow = (i) => setUrls(prev => prev.filter((_, j) => j !== i))
 
   return (
@@ -336,16 +497,13 @@ function GoogleDocsField({ urls, setUrls, loading }) {
               type="text"
               placeholder="https://docs.google.com/document/d/…"
               value={url}
-              onChange={(e) => handleChange(i, e.target.value)}
+              onChange={e => handleChange(i, e.target.value)}
               disabled={loading}
             />
             {urls.length > 1 && (
-              <button
-                type="button"
-                className="gdocs-remove"
-                onClick={() => removeRow(i)}
-                disabled={loading}
-              >✕</button>
+              <button type="button" className="gdocs-remove" onClick={() => removeRow(i)} disabled={loading}>
+                ✕
+              </button>
             )}
           </div>
         ))}
@@ -414,21 +572,16 @@ function InputForm({ form, setForm, pdfFile, setPdfFile, googleDocsUrls, setGoog
       </div>
 
       <PdfUploadField pdfFile={pdfFile} setPdfFile={setPdfFile} loading={loading} />
-
       <GoogleDocsField urls={googleDocsUrls} setUrls={setGoogleDocsUrls} loading={loading} />
 
       <button type="submit" className="submit-btn" disabled={loading}>
-        {loading ? (
-          <><span className="spinner" /> Analysing…</>
-        ) : (
-          'Analyse My Profile'
-        )}
+        {loading ? <><span className="spinner" /> Analysing…</> : 'Analyse My Profile'}
       </button>
     </form>
   )
 }
 
-// ─── Root App ────────────────────────────────────────────────────────────────
+// ─── Root App ─────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [form, setForm] = useState({
@@ -440,16 +593,15 @@ export default function App() {
   const [pdfFile, setPdfFile]               = useState(null)
   const [googleDocsUrls, setGoogleDocsUrls] = useState([''])
 
-  const [status, setStatus]           = useState('idle')   // idle | running | done | error
-  const [nodeStatus, setNodeStatus]   = useState({})        // node → 'running' | 'done' | 'error'
-  const [results, setResults]         = useState({})        // accumulated state patches
-  const [errorMsg, setErrorMsg]       = useState('')
-  const [activeTab, setActiveTab]     = useState('gap')
+  const [status, setStatus]         = useState('idle')
+  const [nodeStatus, setNodeStatus] = useState({})
+  const [results, setResults]       = useState({})
+  const [errorMsg, setErrorMsg]     = useState('')
+  const [activeTab, setActiveTab]   = useState('gap')
   const readerRef = useRef(null)
 
   const handleEvent = (event) => {
     if (event.type === 'start') {
-      // Mark all scanners as running
       const running = {}
       SCANNER_NODES.forEach(n => { running[n] = 'running' })
       setNodeStatus(running)
@@ -459,32 +611,15 @@ export default function App() {
     if (event.type === 'node_done') {
       const { node, data } = event
       setNodeStatus(prev => ({ ...prev, [node]: data?.errors?.length ? 'error' : 'done' }))
-
-      // After scanners done, mark analysis nodes running in sequence
-      if (node === 'aggregate') {
-        setNodeStatus(prev => ({ ...prev, gap_analysis: 'running' }))
-      }
-      if (node === 'gap_analysis') {
-        setNodeStatus(prev => ({ ...prev, plan_generator: 'running' }))
-      }
-      if (node === 'plan_generator') {
-        setNodeStatus(prev => ({ ...prev, resume_tuner: 'running' }))
-      }
-
-      // Accumulate results
+      if (node === 'aggregate')    setNodeStatus(prev => ({ ...prev, gap_analysis:  'running' }))
+      if (node === 'gap_analysis') setNodeStatus(prev => ({ ...prev, plan_generator:'running' }))
+      if (node === 'plan_generator') setNodeStatus(prev => ({ ...prev, resume_tuner:'running' }))
       setResults(prev => ({ ...prev, ...data }))
       return
     }
 
-    if (event.type === 'done') {
-      setStatus('done')
-      return
-    }
-
-    if (event.type === 'error') {
-      setStatus('error')
-      setErrorMsg(event.message || 'Unknown error')
-    }
+    if (event.type === 'done') { setStatus('done'); return }
+    if (event.type === 'error') { setStatus('error'); setErrorMsg(event.message || '') }
   }
 
   const handleSubmit = async (e) => {
@@ -493,6 +628,7 @@ export default function App() {
     setNodeStatus({})
     setResults({})
     setErrorMsg('')
+    setActiveTab('gap')
 
     try {
       // Step 1 — upload PDF if selected
@@ -501,12 +637,8 @@ export default function App() {
         const fd = new FormData()
         fd.append('file', pdfFile)
         const uploadResp = await fetch('/api/upload-pdf', { method: 'POST', body: fd })
-        if (!uploadResp.ok) {
-          const text = await uploadResp.text()
-          throw new Error(`PDF upload failed: ${text}`)
-        }
-        const uploadData = await uploadResp.json()
-        pdf_path = uploadData.pdf_path
+        if (!uploadResp.ok) throw new Error('PDF upload failed')
+        pdf_path = (await uploadResp.json()).pdf_path
       }
 
       // Step 2 — filter blank Google Docs entries
@@ -518,11 +650,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ ...form, pdf_path, google_docs_ids }),
       })
-
-      if (!resp.ok) {
-        const text = await resp.text()
-        throw new Error(`Server error ${resp.status}: ${text}`)
-      }
+      if (!resp.ok) throw new Error(`server error ${resp.status}`)
 
       const reader  = resp.body.getReader()
       const decoder = new TextDecoder()
@@ -532,19 +660,13 @@ export default function App() {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-
         buffer += decoder.decode(value, { stream: true })
-
-        // SSE messages are separated by double newlines
         const parts = buffer.split('\n\n')
-        buffer = parts.pop()   // keep incomplete trailing chunk
-
+        buffer = parts.pop()
         for (const part of parts) {
           const line = part.trim()
           if (line.startsWith('data: ')) {
-            try {
-              handleEvent(JSON.parse(line.slice(6)))
-            } catch (_) {}
+            try { handleEvent(JSON.parse(line.slice(6))) } catch (_) {}
           }
         }
       }
@@ -556,14 +678,20 @@ export default function App() {
     }
   }
 
-  const gap    = results.skill_gap
-  const plan   = results.learning_plan
-  const resume = results.tuned_resume
-  const errors = results.errors || []
+  const gap     = results.skill_gap
+  const plan    = results.learning_plan
+  const resume  = results.tuned_resume
+  const warnings = friendlyWarnings(results.errors)
+
+  const TABS = [
+    { key: 'gap',    label: 'Gap Analysis' },
+    { key: 'plan',   label: 'Learning Plan' },
+    { key: 'resume', label: 'Tuned Resume' },
+    { key: 'chat',   label: '◈ Ask AI' },
+  ]
 
   return (
     <div className="app">
-      {/* Header */}
       <header className="header">
         <div className="header-inner">
           <div className="logo">
@@ -575,7 +703,7 @@ export default function App() {
       </header>
 
       <main className="main">
-        {/* Left column: input */}
+        {/* Left column */}
         <section className="col-left">
           <div className="card">
             <h2 className="card-title">Your Profile</h2>
@@ -592,7 +720,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* Right column: progress + results */}
+        {/* Right column */}
         <section className="col-right">
           {status === 'idle' && (
             <div className="idle-state">
@@ -607,32 +735,26 @@ export default function App() {
 
           {status === 'error' && (
             <div className="card error-card">
-              <strong>Error</strong>
-              <p>{errorMsg}</p>
+              <strong>Couldn't complete the analysis</strong>
+              <p>{friendlyError(errorMsg)}</p>
             </div>
           )}
 
-          {errors.length > 0 && (
-            <div className="card warning-card">
-              <strong>Warnings ({errors.length})</strong>
-              <ul className="warning-list">
-                {errors.map((e, i) => <li key={i}>{e}</li>)}
+          {warnings.length > 0 && status !== 'error' && (
+            <div className="card notice-card">
+              <ul className="notice-list">
+                {warnings.map((w, i) => <li key={i}>{w}</li>)}
               </ul>
             </div>
           )}
 
           {status === 'done' && (
             <div className="card results-card">
-              {/* Tab bar */}
               <div className="tab-bar">
-                {[
-                  { key: 'gap',    label: 'Gap Analysis' },
-                  { key: 'plan',   label: 'Learning Plan' },
-                  { key: 'resume', label: 'Tuned Resume' },
-                ].map(tab => (
+                {TABS.map(tab => (
                   <button
                     key={tab.key}
-                    className={`tab-btn ${activeTab === tab.key ? 'active' : ''}`}
+                    className={`tab-btn ${activeTab === tab.key ? 'active' : ''} ${tab.key === 'chat' ? 'tab-btn-chat' : ''}`}
                     onClick={() => setActiveTab(tab.key)}
                   >
                     {tab.label}
@@ -643,6 +765,7 @@ export default function App() {
               {activeTab === 'gap'    && <GapTab    gap={gap} />}
               {activeTab === 'plan'   && <PlanTab   plan={plan} />}
               {activeTab === 'resume' && <ResumeTab resume={resume} />}
+              {activeTab === 'chat'   && <ChatTab   analysisContext={results} />}
             </div>
           )}
         </section>

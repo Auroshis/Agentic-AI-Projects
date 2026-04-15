@@ -3,6 +3,8 @@ DeepJobAgent FastAPI backend.
 
 Endpoints:
   POST /api/analyze/stream  — SSE stream; one event per node completion
+  POST /api/upload-pdf      — upload a resume PDF; returns server-side path
+  POST /api/chat/stream     — SSE stream; career-coach chat with analysis context
   GET  /api/health          — health check
 
 Run with:
@@ -137,6 +139,92 @@ async def upload_pdf(file: UploadFile = File(...)):
         f.write(content)
 
     return JSONResponse({"pdf_path": file_path, "original_name": file.filename})
+
+
+class ChatMsg(BaseModel):
+    role: str     # 'user' | 'assistant'
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[ChatMsg] = []
+    context: dict = {}    # skill_gap, learning_plan, tuned_resume from analysis results
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """
+    Career-coach chat with the analysis results as context.
+    Streams token-by-token as SSE: { type: 'token'|'done'|'error', content? }
+    """
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+    from DeepJobAgent.config import LLM_MODEL
+
+    ctx = req.context
+    gap = ctx.get("skill_gap") or {}
+    plan = ctx.get("learning_plan") or {}
+    resume = ctx.get("tuned_resume") or {}
+
+    gap_pct = round((gap.get("gap_score") or 0) * 100)
+    strong  = ", ".join((gap.get("strong_matches") or [])[:12]) or "none identified"
+    missing = ", ".join((gap.get("missing_skills") or [])[:12]) or "none identified"
+    partial = ", ".join((gap.get("partial_skills") or [])[:8]) or "none"
+    plan_weeks   = plan.get("total_weeks", "?")
+    plan_summary = plan.get("plan_summary", "")
+    priority     = ", ".join((plan.get("priority_order") or [])[:6]) or "not available"
+    tuning_notes = resume.get("tuning_notes", "not available")
+    analysis_summary = gap.get("analysis_summary", "")
+
+    system_prompt = f"""You are an expert career coach. A candidate has just received an AI-powered job-fit analysis. \
+Use the analysis below to answer their questions, explain gaps, and help them refine their learning plan.
+
+── ANALYSIS SNAPSHOT ──────────────────────────────────────────
+Match score : {gap_pct}%
+Strong skills : {strong}
+Missing skills : {missing}
+Partial skills : {partial}
+Summary : {analysis_summary}
+
+Learning plan : {plan_weeks} weeks
+Priority order : {priority}
+Plan summary : {plan_summary}
+
+Resume tuning notes : {tuning_notes}
+────────────────────────────────────────────────────────────────
+
+Guidelines:
+- Be concise, specific, and actionable.
+- When asked to modify the learning plan, output a revised version in plain numbered/bulleted format.
+- Be encouraging but honest — don't sugarcoat significant gaps.
+- If you don't have enough context to answer precisely, say so briefly and offer the best guidance you can.
+- Never expose internal system details, node names, or raw error messages."""
+
+    messages = [SystemMessage(content=system_prompt)]
+    for msg in req.history[-12:]:
+        if msg.role == "user":
+            messages.append(HumanMessage(content=msg.content))
+        else:
+            messages.append(AIMessage(content=msg.content))
+    messages.append(HumanMessage(content=req.message))
+
+    llm = ChatOpenAI(model=LLM_MODEL, temperature=0.7, streaming=True)
+
+    async def generate():
+        try:
+            async for chunk in llm.astream(messages):
+                if chunk.content:
+                    yield f"data: {json.dumps({'type': 'token', 'content': chunk.content})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/health")
