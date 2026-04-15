@@ -134,15 +134,10 @@ def _segment_sections(raw_text: str) -> dict:
     return {k: v for k, v in sections.items() if v}
 
 
-@tool
-def read_google_doc(doc_id: str) -> dict:
+def read_google_doc_raw(doc_id: str) -> dict:
     """
-    Read a Google Document by its ID and return the full text plus
-    resume sections parsed into a structured dict.
-
-    The document must be shared with the service account email (view access).
-    doc_id is the string from the Google Docs URL:
-      https://docs.google.com/document/d/<doc_id>/edit
+    Direct (non-tool) function to read a Google Doc by ID.
+    Call this from nodes; use read_google_doc (tool) inside ReAct agents.
     """
     try:
         service = _get_docs_service()
@@ -163,3 +158,16 @@ def read_google_doc(doc_id: str) -> dict:
             "sections": {},
             "error": str(e),
         }
+
+
+@tool
+def read_google_doc(doc_id: str) -> dict:
+    """
+    Read a Google Document by its ID and return the full text plus
+    resume sections parsed into a structured dict.
+
+    The document must be shared with the service account email (view access).
+    doc_id is the string from the Google Docs URL:
+      https://docs.google.com/document/d/<doc_id>/edit
+    """
+    return read_google_doc_raw(doc_id)

@@ -446,6 +446,92 @@ input:disabled, textarea:disabled { opacity: .5; cursor: not-allowed; }
   line-height: 1.7;
 }
 
+/* ── PDF upload ──────────────────────────────────────────────────────────────── */
+.pdf-upload-area {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: .65rem .75rem;
+  transition: border-color .15s, background .15s;
+  background: var(--bg);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.pdf-upload-area:hover:not(.disabled) { border-color: var(--accent); background: rgba(99,102,241,.04); }
+.pdf-upload-area.has-file { border-color: var(--accent); border-style: solid; }
+.pdf-upload-area.disabled { opacity: .5; cursor: not-allowed; }
+
+.pdf-placeholder {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  color: var(--muted);
+  font-size: .85rem;
+}
+.pdf-upload-icon { font-size: 1rem; }
+
+.pdf-file-info {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  width: 100%;
+  font-size: .85rem;
+}
+.pdf-icon { font-size: .9rem; color: var(--accent); }
+.pdf-name { flex: 1; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pdf-size { color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.pdf-remove {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: .8rem;
+  padding: .1rem .3rem;
+  border-radius: 4px;
+  transition: color .15s, background .15s;
+  flex-shrink: 0;
+}
+.pdf-remove:hover { color: var(--red); background: var(--red-bg); }
+
+/* ── Google Docs list ────────────────────────────────────────────────────────── */
+.gdocs-list { display: flex; flex-direction: column; gap: .4rem; margin-bottom: .4rem; }
+
+.gdocs-row {
+  display: flex;
+  gap: .4rem;
+  align-items: center;
+}
+.gdocs-row input { flex: 1; }
+
+.gdocs-remove {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: .75rem;
+  padding: .35rem .5rem;
+  transition: color .15s, border-color .15s;
+  flex-shrink: 0;
+}
+.gdocs-remove:hover { color: var(--red); border-color: var(--red); }
+
+.gdocs-add-btn {
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: .8rem;
+  padding: .4rem .75rem;
+  transition: color .15s, border-color .15s;
+  width: 100%;
+}
+.gdocs-add-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.gdocs-add-btn:disabled { opacity: .5; cursor: not-allowed; }
+
 /* ── Responsive ──────────────────────────────────────────────────────────────── */
 @media (max-width: 900px) {
   .main { grid-template-columns: 1fr; }

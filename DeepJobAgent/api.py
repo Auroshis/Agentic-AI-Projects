@@ -14,14 +14,19 @@ from __future__ import annotations
 import json
 import sys
 import os
+import tempfile
+import uuid
 
 # Make sure the project root is on the path when running directly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
+
+_UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "deepjobagent_uploads")
+os.makedirs(_UPLOAD_DIR, exist_ok=True)
 
 from DeepJobAgent.graph import graph
 from DeepJobAgent.state import DeepJobState
@@ -41,7 +46,8 @@ class AnalyzeRequest(BaseModel):
     github_username: str
     leetcode_username: str
     linkedin_url: str
-    google_docs_id: str
+    pdf_path: str = ""
+    google_docs_ids: list[str] = []
 
 
 # Maps internal node names to human-readable labels for the UI
@@ -49,7 +55,7 @@ NODE_LABELS = {
     "github_scanner":      "GitHub",
     "leetcode_scanner":    "LeetCode",
     "linkedin_scanner":    "LinkedIn",
-    "google_docs_scanner": "Google Docs",
+    "google_docs_scanner": "Documents",
     "aggregate":           "Aggregating",
     "gap_analysis":        "Gap Analysis",
     "plan_generator":      "Learning Plan",
@@ -74,7 +80,8 @@ async def analyze_stream(req: AnalyzeRequest):
         "github_username":   req.github_username,
         "leetcode_username": req.leetcode_username,
         "linkedin_url":      req.linkedin_url,
-        "google_docs_id":    req.google_docs_id,
+        "pdf_path":          req.pdf_path,
+        "google_docs_ids":   req.google_docs_ids,
         "github_data":       None,
         "leetcode_data":     None,
         "linkedin_data":     None,
@@ -111,6 +118,25 @@ async def analyze_stream(req: AnalyzeRequest):
             "X-Accel-Buffering": "no",   # disable nginx buffering
         },
     )
+
+
+@app.post("/api/upload-pdf")
+async def upload_pdf(file: UploadFile = File(...)):
+    """
+    Upload a PDF resume. Returns the server-side path to pass in the analyze request.
+    The file is saved to a temp directory and reused within the session.
+    """
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+
+    filename = f"{uuid.uuid4().hex}.pdf"
+    file_path = os.path.join(_UPLOAD_DIR, filename)
+
+    content = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    return JSONResponse({"pdf_path": file_path, "original_name": file.filename})
 
 
 @app.get("/api/health")

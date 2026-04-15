@@ -35,11 +35,18 @@ class LinkedinProfile(TypedDict):
     error: Optional[str]
 
 
-class GoogleDocsResume(TypedDict):
-    document_id: str
-    raw_text: str
+class DocumentsData(TypedDict):
+    sources: list              # [{type: 'pdf'|'gdoc', ref: str, title: str}]
+    raw_text: str              # combined text from all sources
     sections: dict             # {"experience": "...", "skills": "...", ...}
+    skills: list
+    experience: list
+    education: list
     error: Optional[str]
+
+
+# Keep alias for any external code that references the old name
+GoogleDocsResume = DocumentsData
 
 
 class SkillGap(TypedDict):
@@ -74,13 +81,14 @@ class DeepJobState(TypedDict):
     github_username: str
     leetcode_username: str
     linkedin_url: str
-    google_docs_id: str
+    pdf_path: str              # server-side path to uploaded PDF (empty if none)
+    google_docs_ids: list      # list of Google Doc IDs or URLs
 
     # ── Scanner outputs (one writer per key, no reducer needed) ─────────────
     github_data: Optional[GithubProfile]
     leetcode_data: Optional[LeetcodeProfile]
     linkedin_data: Optional[LinkedinProfile]
-    google_docs_data: Optional[GoogleDocsResume]
+    google_docs_data: Optional[DocumentsData]
 
     # ── Fan-in counter: each scanner writes +1 ───────────────────────────────
     scanners_complete: Annotated[int, operator.add]

@@ -1,15 +1,24 @@
 import { useState, useRef } from 'react'
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const SCANNER_NODES = ['github_scanner', 'leetcode_scanner', 'linkedin_scanner', 'google_docs_scanner']
+
 const ANALYSIS_NODES = ['gap_analysis', 'plan_generator', 'resume_tuner']
 
 const NODE_META = {
   github_scanner:      { label: 'GitHub',      icon: '⌥' },
   leetcode_scanner:    { label: 'LeetCode',    icon: '⚡' },
   linkedin_scanner:    { label: 'LinkedIn',    icon: '◈' },
-  google_docs_scanner: { label: 'Google Docs', icon: '◻' },
+  google_docs_scanner: { label: 'Documents',   icon: '◻' },
   gap_analysis:        { label: 'Gap Analysis',    icon: '◎' },
   plan_generator:      { label: 'Learning Plan',   icon: '◐' },
   resume_tuner:        { label: 'Resume Tuner',    icon: '◑' },
@@ -255,9 +264,102 @@ function ResumeTab({ resume }) {
   )
 }
 
+// ─── PDF Upload field ─────────────────────────────────────────────────────────
+
+function PdfUploadField({ pdfFile, setPdfFile, loading }) {
+  const fileRef = useRef(null)
+
+  const handleDrop = (e) => {
+    e.preventDefault()
+    const file = e.dataTransfer.files[0]
+    if (file && file.type === 'application/pdf') setPdfFile(file)
+  }
+
+  return (
+    <div className="field">
+      <label>Resume PDF <span className="label-hint">— optional</span></label>
+      <div
+        className={`pdf-upload-area ${pdfFile ? 'has-file' : ''} ${loading ? 'disabled' : ''}`}
+        onClick={() => !loading && fileRef.current?.click()}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={handleDrop}
+      >
+        {pdfFile ? (
+          <div className="pdf-file-info">
+            <span className="pdf-icon">⬜</span>
+            <span className="pdf-name">{pdfFile.name}</span>
+            <span className="pdf-size">{formatBytes(pdfFile.size)}</span>
+            <button
+              type="button"
+              className="pdf-remove"
+              onClick={(e) => { e.stopPropagation(); setPdfFile(null) }}
+              disabled={loading}
+            >✕</button>
+          </div>
+        ) : (
+          <div className="pdf-placeholder">
+            <span className="pdf-upload-icon">↑</span>
+            <span>Click or drag to upload PDF</span>
+          </div>
+        )}
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".pdf"
+        style={{ display: 'none' }}
+        onChange={(e) => setPdfFile(e.target.files[0] || null)}
+      />
+    </div>
+  )
+}
+
+// ─── Google Docs URL list ─────────────────────────────────────────────────────
+
+function GoogleDocsField({ urls, setUrls, loading }) {
+  const handleChange = (i, val) => {
+    setUrls(prev => prev.map((u, j) => j === i ? val : u))
+  }
+  const addRow = () => setUrls(prev => [...prev, ''])
+  const removeRow = (i) => setUrls(prev => prev.filter((_, j) => j !== i))
+
+  return (
+    <div className="field">
+      <label>
+        Google Docs
+        <span className="label-hint"> — paste full URLs or doc IDs, optional</span>
+      </label>
+      <div className="gdocs-list">
+        {urls.map((url, i) => (
+          <div key={i} className="gdocs-row">
+            <input
+              type="text"
+              placeholder="https://docs.google.com/document/d/…"
+              value={url}
+              onChange={(e) => handleChange(i, e.target.value)}
+              disabled={loading}
+            />
+            {urls.length > 1 && (
+              <button
+                type="button"
+                className="gdocs-remove"
+                onClick={() => removeRow(i)}
+                disabled={loading}
+              >✕</button>
+            )}
+          </div>
+        ))}
+      </div>
+      <button type="button" className="gdocs-add-btn" onClick={addRow} disabled={loading}>
+        + Add another doc
+      </button>
+    </div>
+  )
+}
+
 // ─── Input form ───────────────────────────────────────────────────────────────
 
-function InputForm({ form, setForm, onSubmit, loading }) {
+function InputForm({ form, setForm, pdfFile, setPdfFile, googleDocsUrls, setGoogleDocsUrls, onSubmit, loading }) {
   const handleChange = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }))
 
   return (
@@ -311,19 +413,9 @@ function InputForm({ form, setForm, onSubmit, loading }) {
         />
       </div>
 
-      <div className="field">
-        <label>
-          Google Docs Resume ID
-          <span className="label-hint"> — from the URL: /document/d/<em>ID</em>/edit</span>
-        </label>
-        <input
-          type="text"
-          placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
-          value={form.google_docs_id}
-          onChange={handleChange('google_docs_id')}
-          disabled={loading}
-        />
-      </div>
+      <PdfUploadField pdfFile={pdfFile} setPdfFile={setPdfFile} loading={loading} />
+
+      <GoogleDocsField urls={googleDocsUrls} setUrls={setGoogleDocsUrls} loading={loading} />
 
       <button type="submit" className="submit-btn" disabled={loading}>
         {loading ? (
@@ -344,8 +436,9 @@ export default function App() {
     github_username:   '',
     leetcode_username: '',
     linkedin_url:      '',
-    google_docs_id:    '',
   })
+  const [pdfFile, setPdfFile]               = useState(null)
+  const [googleDocsUrls, setGoogleDocsUrls] = useState([''])
 
   const [status, setStatus]           = useState('idle')   // idle | running | done | error
   const [nodeStatus, setNodeStatus]   = useState({})        // node → 'running' | 'done' | 'error'
@@ -402,10 +495,28 @@ export default function App() {
     setErrorMsg('')
 
     try {
+      // Step 1 — upload PDF if selected
+      let pdf_path = ''
+      if (pdfFile) {
+        const fd = new FormData()
+        fd.append('file', pdfFile)
+        const uploadResp = await fetch('/api/upload-pdf', { method: 'POST', body: fd })
+        if (!uploadResp.ok) {
+          const text = await uploadResp.text()
+          throw new Error(`PDF upload failed: ${text}`)
+        }
+        const uploadData = await uploadResp.json()
+        pdf_path = uploadData.pdf_path
+      }
+
+      // Step 2 — filter blank Google Docs entries
+      const google_docs_ids = googleDocsUrls.map(u => u.trim()).filter(Boolean)
+
+      // Step 3 — stream analysis
       const resp = await fetch('/api/analyze/stream', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(form),
+        body:    JSON.stringify({ ...form, pdf_path, google_docs_ids }),
       })
 
       if (!resp.ok) {
@@ -471,6 +582,10 @@ export default function App() {
             <InputForm
               form={form}
               setForm={setForm}
+              pdfFile={pdfFile}
+              setPdfFile={setPdfFile}
+              googleDocsUrls={googleDocsUrls}
+              setGoogleDocsUrls={setGoogleDocsUrls}
               onSubmit={handleSubmit}
               loading={status === 'running'}
             />
